@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>จัดการเมนู</title>
+<style>
+  *{box-sizing:border-box}
+  body{font-family:sans-serif;margin:0;background:#f5f5f5;color:#222}
+  header{background:#06c755;color:#fff;padding:14px 16px;font-size:18px;display:flex;justify-content:space-between;align-items:center}
+  header button{background:transparent;border:1px solid #fff9;color:#fff;border-radius:8px;padding:6px 12px;font-size:14px}
+  main{max-width:640px;margin:0 auto;padding:8px}
+  .box{background:#fff;border-radius:10px;padding:14px;margin:8px 0}
+  h2{font-size:16px;margin:0 0 10px}
+  input[type=text],input[type=password],input[type=number]{width:100%;padding:10px;border:1px solid #ccc;border-radius:8px;font-size:16px}
+  .row{display:flex;gap:8px;align-items:center;margin-top:8px}
+  .row .price{width:120px;flex:none}
+  button.primary{background:#06c755;color:#fff;border:0;border-radius:8px;padding:10px 16px;font-size:15px}
+  button.danger{background:#fff;color:#d32f2f;border:1px solid #d32f2f;border-radius:8px;padding:10px 16px;font-size:15px}
+  button:disabled{opacity:.5}
+  .full{width:100%}
+  .sw{display:flex;align-items:center;gap:8px;margin-left:auto;font-size:15px}
+  .sw input{width:22px;height:22px}
+  .off{opacity:.55}
+  .tag{font-size:13px;margin-left:4px}
+  .ok{color:#058f3f}.no{color:#d32f2f}
+  .empty{text-align:center;color:#777;padding:24px}
+  #toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#222;color:#fff;padding:10px 16px;border-radius:20px;font-size:14px;opacity:0;pointer-events:none;transition:opacity .2s;max-width:90%}
+  #toast.show{opacity:.95}
+  #toast.err{background:#d32f2f}
+  .hint{color:#777;font-size:13px;margin-top:6px}
+</style>
+</head>
+<body>
+
+<!-- เข้าสู่ระบบ -->
+<section id="login">
+  <header>จัดการเมนูอาหาร</header>
+  <main>
+    <div class="box">
+      <h2>เข้าสู่ระบบเจ้าของร้าน</h2>
+      <input id="pin" type="password" placeholder="รหัสผ่าน" autocomplete="current-password">
+      <div class="row"><button id="loginBtn" class="primary full">เข้าสู่ระบบ</button></div>
+      <div id="loginErr" class="hint no"></div>
+    </div>
+  </main>
+</section>
+
+<!-- หน้าจัดการ -->
+<section id="app" hidden>
+  <header>จัดการเมนูอาหาร <button id="logout">ออกจากระบบ</button></header>
+  <main>
+    <div class="box">
+      <h2>เพิ่มเมนูใหม่</h2>
+      <input id="newName" type="text" placeholder="ชื่อเมนู เช่น ผัดไทยกุ้งสด" maxlength="100">
+      <div class="row">
+        <input id="newPrice" class="price" type="number" inputmode="decimal" min="0" placeholder="ราคา (฿)">
+        <button id="addBtn" class="primary" style="flex:1">+ เพิ่มเมนู</button>
+      </div>
+    </div>
+
+    <div class="box" style="background:transparent;padding:0;margin:0">
+      <h2 style="margin:14px 4px 4px">เมนูทั้งหมด <span id="count" class="hint"></span></h2>
+      <div class="hint" style="margin:0 4px 6px">ติ๊ก "พร้อมขาย" เมื่อเมนูหมด ให้เอาติ๊กออก ลูกค้าจะไม่เห็นเมนูนั้น</div>
+    </div>
+    <div id="list"></div>
+  </main>
+</section>
+
+<div id="toast"></div>
+
+<script>
+// ====== แก้ค่านี้ ======
+const API_URL = "ใส่-URL-ของ-Apps-Script-Web-App";
+// =======================
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+let PIN = "";
+let items = [];
+let busy = false;
+
+function toast(text, isErr){
+  const t = $("toast");
+  t.textContent = text;
+  t.className = "show" + (isErr ? " err" : "");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => (t.className = ""), 2200);
+}
+
+async function api(action, data = {}){
+  const res = await fetch(API_URL, {
+    method: "POST",
+    headers: {"Content-Type": "text/plain;charset=utf-8"},
+    body: JSON.stringify({action, pin: PIN, ...data})
+  });
+  const out = await res.json();
+  if(!out.ok) throw new Error(out.error || "เกิดข้อผิดพลาด");
+  return out;
+}
+
+function render(){
+  $("count").textContent = `(${items.length} รายการ)`;
+  $("list").innerHTML = items.length ? items.map(m => `
+    <div class="box ${m.available ? "" : "off"}" data-id="${m.id}">
+      <input class="n" type="text" value="${esc(m.name)}" maxlength="100" aria-label="ชื่อเมนู">
+      <div class="row">
+        <input class="p price" type="number" inputmode="decimal" min="0" value="${m.price}" aria-label="ราคา">
+        <label class="sw">
+          <input class="a" type="checkbox" ${m.available ? "checked" : ""}>
+          <span>พร้อมขาย</span>
+        </label>
+      </div>
+      <div class="row">
+        <button class="save primary" style="flex:1">บันทึก</button>
+        <button class="del danger">ลบ</button>
+      </div>
+    </div>`).join("") : '<div class="empty">ยังไม่มีเมนู เพิ่มเมนูแรกได้ด้านบน</div>';
+}
+
+async function run(fn, okText){
+  if(busy) return;
+  busy = true;
+  document.querySelectorAll("button").forEach(b => (b.disabled = true));
+  try{
+    await fn();
+    if(okText) toast(okText);
+  }catch(e){
+    toast(e.message, true);
+  }finally{
+    busy = false;
+    document.querySelectorAll("button").forEach(b => (b.disabled = false));
+  }
+}
+
+function readCard(card){
+  return {
+    id: Number(card.dataset.id),
+    name: card.querySelector(".n").value.trim(),
+    price: card.querySelector(".p").value,
+    available: card.querySelector(".a").checked
+  };
+}
+
+async function saveItem(data){
+  const out = await api("admin_save", data);
+  items = out.items;
+  render();
+}
+
+// บันทึก / ลบ
+$("list").addEventListener("click", e => {
+  const card = e.target.closest(".box[data-id]");
+  if(!card) return;
+  if(e.target.classList.contains("save")){
+    run(() => saveItem(readCard(card)), "บันทึกแล้ว");
+  } else if(e.target.classList.contains("del")){
+    const name = card.querySelector(".n").value;
+    if(!confirm(`ลบ "${name}" ใช่ไหม?`)) return;
+    run(async () => {
+      const out = await api("admin_delete", {id: Number(card.dataset.id)});
+      items = out.items;
+      render();
+    }, "ลบแล้ว");
+  }
+});
+
+// ติ๊ก พร้อมขาย / หมด ให้บันทึกทันที
+$("list").addEventListener("change", e => {
+  if(!e.target.classList.contains("a")) return;
+  const card = e.target.closest(".box[data-id]");
+  const data = readCard(card);
+  run(() => saveItem(data), data.available ? "เปิดขายแล้ว" : "ปิดเมนู (หมด) แล้ว");
+});
+
+// เพิ่มเมนูใหม่
+$("addBtn").onclick = () => run(async () => {
+  const name = $("newName").value.trim();
+  const price = $("newPrice").value;
+  if(!name) throw new Error("กรุณาใส่ชื่อเมนู");
+  if(price === "") throw new Error("กรุณาใส่ราคา");
+  await saveItem({name, price, available: true});
+  $("newName").value = "";
+  $("newPrice").value = "";
+}, "เพิ่มเมนูแล้ว");
+
+// เข้า/ออกระบบ
+function showApp(){ $("login").hidden = true; $("app").hidden = false; render(); }
+
+async function login(pin, silent){
+  PIN = pin;
+  try{
+    const out = await api("admin_list");
+    items = out.items;
+    try{ sessionStorage.setItem("adminPin", pin); }catch(e){}
+    showApp();
+  }catch(e){
+    PIN = "";
+    try{ sessionStorage.removeItem("adminPin"); }catch(_){}
+    if(!silent) $("loginErr").textContent = e.message;
+  }
+}
+
+$("loginBtn").onclick = async () => {
+  $("loginErr").textContent = "";
+  $("loginBtn").disabled = true;
+  await login($("pin").value, false);
+  $("loginBtn").disabled = false;
+};
+$("pin").addEventListener("keydown", e => { if(e.key === "Enter") $("loginBtn").click(); });
+
+$("logout").onclick = () => {
+  try{ sessionStorage.removeItem("adminPin"); }catch(e){}
+  PIN = ""; items = [];
+  $("app").hidden = true; $("login").hidden = false; $("pin").value = "";
+};
+
+// กลับมาหน้าเดิมในแท็บเดิม ไม่ต้องใส่รหัสซ้ำ
+try{
+  const saved = sessionStorage.getItem("adminPin");
+  if(saved) login(saved, true);
+}catch(e){}
+</script>
+</body>
+</html>
