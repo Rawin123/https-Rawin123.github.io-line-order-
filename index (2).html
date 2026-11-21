@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>สั่งอาหาร</title>
+<script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+<style>
+  body{font-family:sans-serif;margin:0;background:#f5f5f5;padding-bottom:130px}
+  header{background:#06c755;color:#fff;padding:14px 16px;font-size:18px}
+  .item{display:flex;justify-content:space-between;align-items:center;background:#fff;margin:8px;padding:12px;border-radius:10px}
+  .qty button{width:30px;height:30px;border:0;border-radius:50%;background:#06c755;color:#fff;font-size:18px}
+  .qty span{display:inline-block;min-width:24px;text-align:center}
+  .msg{text-align:center;color:#777;padding:40px 16px}
+  .bar{position:fixed;bottom:0;left:0;right:0;background:#fff;padding:12px;box-shadow:0 -2px 8px #0002}
+  .bar input{width:100%;box-sizing:border-box;padding:8px;margin-bottom:8px;border:1px solid #ccc;border-radius:8px}
+  .bar button{width:100%;padding:12px;border:0;border-radius:8px;background:#06c755;color:#fff;font-size:16px}
+  .bar button:disabled{background:#aaa}
+</style>
+</head>
+<body>
+<header id="hello">เมนูอาหาร</header>
+<div id="menu"><div class="msg">กำลังโหลดเมนู...</div></div>
+
+<div class="bar">
+  <input id="note" placeholder="หมายเหตุ / เบอร์โทร / เวลารับ">
+  <button id="submit" disabled>สั่งอาหาร (฿0)</button>
+</div>
+
+<script>
+// ====== แก้ 2 ค่านี้ ======
+const LIFF_ID = "ใส่-LIFF-ID-ของคุณ";
+const API_URL = "ใส่-URL-ของ-Apps-Script-Web-App";
+// ==========================
+
+let MENU = [];          // ดึงจาก Google Sheet (แท็บ Menu) ผ่าน Apps Script
+const cart = {};
+let profile = null;
+
+const esc = s => String(s).replace(/[&<>"']/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+function render(){
+  const box = document.getElementById("menu");
+  if (MENU.length === 0) {
+    box.innerHTML = '<div class="msg">ขณะนี้ยังไม่มีเมนูที่พร้อมขาย</div>';
+  } else {
+    box.innerHTML = MENU.map(m => `
+      <div class="item">
+        <div><b>${esc(m.name)}</b><br>฿${m.price}</div>
+        <div class="qty">
+          <button onclick="chg(${m.id},-1)">−</button>
+          <span>${cart[m.id]||0}</span>
+          <button onclick="chg(${m.id},1)">+</button>
+        </div>
+      </div>`).join("");
+  }
+  const total = MENU.reduce((s,m)=>s+(cart[m.id]||0)*m.price,0);
+  const btn = document.getElementById("submit");
+  btn.textContent = `สั่งอาหาร (฿${total})`;
+  btn.disabled = total === 0;
+}
+function chg(id,d){ cart[id] = Math.max(0,(cart[id]||0)+d); render(); }
+
+async function loadMenu(){
+  try{
+    const res = await fetch(API_URL + "?action=menu");
+    const data = await res.json();
+    if(!data.ok) throw new Error(data.error||"error");
+    MENU = data.items;
+  }catch(e){
+    document.getElementById("menu").innerHTML =
+      '<div class="msg">โหลดเมนูไม่สำเร็จ กรุณาปิดแล้วเปิดใหม่อีกครั้ง</div>';
+    throw e;
+  }
+}
+
+async function submitOrder(){
+  // ส่งแค่ id + จำนวน ราคาจะถูกคิดใหม่ฝั่งเซิร์ฟเวอร์
+  const items = MENU.filter(m=>cart[m.id]).map(m=>({id:m.id,qty:cart[m.id]}));
+  const btn = document.getElementById("submit");
+  btn.disabled = true; btn.textContent = "กำลังส่งออเดอร์...";
+  try{
+    // ส่งเป็น text/plain เพื่อเลี่ยงปัญหา CORS ของ Apps Script
+    const res = await fetch(API_URL,{
+      method:"POST",
+      headers:{"Content-Type":"text/plain;charset=utf-8"},
+      body: JSON.stringify({
+        action: "order",
+        userId: profile.userId,
+        name: profile.displayName,
+        items,
+        note: document.getElementById("note").value
+      })
+    });
+    const data = await res.json();
+    if(!data.ok) throw new Error(data.error||"error");
+    alert("สั่งสำเร็จ! เลขออเดอร์ " + data.orderId);
+    liff.closeWindow();
+  }catch(e){
+    alert("เกิดข้อผิดพลาด: " + e.message);
+    render();
+  }
+}
+
+async function main(){
+  try{
+    await liff.init({liffId: LIFF_ID});
+    if(!liff.isLoggedIn()){ liff.login(); return; }
+    profile = await liff.getProfile();
+    document.getElementById("hello").textContent = `สวัสดีคุณ ${profile.displayName} 👋`;
+  }catch(e){
+    document.getElementById("hello").textContent = "เปิดผ่าน LINE เพื่อสั่งอาหาร";
+  }
+  document.getElementById("submit").onclick = submitOrder;
+  try { await loadMenu(); } catch(e) { return; }
+  render();
+}
+main();
+</script>
+</body>
+</html>
